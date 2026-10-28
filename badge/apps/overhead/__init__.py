@@ -10,9 +10,11 @@ PLANES_DEMO set, it runs on demo data.
 Controls:
 * Up and down = Pick an aircraft
 * Select = Switch between list with detail and the radar
+* Left and right = Radar range, wider or closer
 * Back = Exit
 """
 
+import gc
 import math
 
 import requests
@@ -31,11 +33,18 @@ POSITIONS = "https://api.adsb.lol/v2/point/%.4f/%.4f/%d"
 ROUTES = "https://api.adsbdb.com/v0/callsign/"
 HEADERS = {"User-Agent": "GitHub Universe Badge 2026 overhead app"}
 
-REFRESH_MS = 12_000         # between position fetches
+# adsb.lol sent the header `4, 4;w=1, 60;w=60, 500;w=86400`, read by third
+# party clients as 500 requests a day per IP address. Conference Wi-Fi shares
+# addresses, so positions are fetched rarely and planes are moved along their
+# track in between. 120 s is 240 requests over 8 hours.
+REFRESH_MS = 120_000        # between position fetches
+DEMO_REFRESH_MS = 5_000
 ROUTE_GAP_MS = 4_000        # between route lookups, each blocks about a second
-RETRY_MS = 20_000
+RETRY_MS = 30_000
+RATE_PAUSE_MS = 600_000     # after adsb.lol answers 429
 ROUTE_PAUSE_MS = 60_000     # after a route lookup is refused or fails
 TIMEOUT = 8
+EXTRAPOLATE_S = 180.0       # radar stops moving planes this long after a fetch
 
 # The point endpoint sends about 500 bytes per aircraft, so a busy 25 nm
 # circle was 42 KB. The default radius is smaller, and only the nearest
@@ -48,6 +57,10 @@ ROUTE_TOP = 12              # routes are only looked up for the nearest few
 MAX_ROUTES = 60             # cached callsigns, oldest dropped first
 
 EARTH_NM = 3440.065
+OVERHEAD_NM = 2.0           # an aircraft this close gets the marker in the list
+
+# Radar range as a share of the fetch radius, widest first
+VIEWS = (1.0, 0.5, 0.25)
 
 # Arriving or departing, see classify()
 NEAR_AIRPORT_NM = 80
@@ -152,6 +165,41 @@ def alt_text(alt, ground):
     return "%d" % alt
 
 
+TYPE_NAMES = {
+    "A19N": "A319neo", "A20N": "A320neo", "A21N": "A321neo",
+    "A319": "A319", "A320": "A320", "A321": "A321",
+    "A332": "A330-200", "A333": "A330-300", "A339": "A330-900",
+    "A359": "A350-900", "A35K": "A350-1000", "A388": "A380",
+    "B712": "717", "B737": "737-700", "B738": "737-800", "B739": "737-900",
+    "B38M": "737 MAX 8", "B39M": "737 MAX 9", "B744": "747-400",
+    "B748": "747-8", "B752": "757-200", "B763": "767-300", "B772": "777-200",
+    "B77W": "777-300ER", "B788": "787-8", "B789": "787-9", "B78X": "787-10",
+    "BCS1": "A220-100", "BCS3": "A220-300", "E170": "E170", "E75L": "E175",
+    "E75S": "E175", "E190": "E190", "CRJ7": "CRJ-700", "CRJ9": "CRJ-900",
+    "DH8D": "Dash 8 Q400", "AT76": "ATR 72", "C172": "Cessna 172",
+    "C182": "Cessna 182", "SR22": "Cirrus SR22", "PA28": "Piper PA-28",
+    "P28A": "Piper PA-28", "BE20": "King Air 200", "R44": "Robinson R44",
+    "B06": "Bell 206", "EC35": "EC135", "H60": "Black Hawk", "GLEX": "Global Exp.",
+    "GLF5": "Gulfstream V", "CL60": "Challenger", "C25A": "Citation CJ2",
+}
+
+
+def type_name(code):
+    return TYPE_NAMES.get(code, code or "?")
+
+
+def is_flight(callsign):
+    """True for an airline style callsign (UAL928), the only kind adsbdb knows."""
+    return len(callsign) >= 4 and callsign[:3].isalpha() and callsign[3].isdigit()
+
+
+def closing_kt(p):
+    """Knots towards the centre, negative when moving away, None if unknown."""
+    if p["ground"] or p["gs"] is None or p["trk"] is None or p["dist"] < 0.05:
+        return None
+    return -(p["e"] * p["ve"] + p["n"] * p["vn"]) / p["dist"] * 3600.0
+
+
 def airport(raw):
     """(code, lat, lon, city) from an adsbdb airport, or None."""
     if not raw:
@@ -218,6 +266,7 @@ def parse_aircraft(a, lat0, lon0):
         "gs": gs,
         "trk": trk,
         "vr": vr,
+        "mil": isinstance(a.get("dbFlags"), int) and bool(a["dbFlags"] & 1),
         "lat": lat,
         "lon": lon,
         "dist": dist,
@@ -361,6 +410,8 @@ next_net = 0
 route_pause_until = 0
 route_cache = {}            # callsign -> route dict, or None for unknown
 route_order = []
+busy = None                 # text for the bar while a request blocks the frame
+view = 0                    # index into VIEWS
 started = badge.ticks
 
 
@@ -419,7 +470,7 @@ def wanted_route():
         order.append(planes[selected])
     order.extend(planes[:ROUTE_TOP])
     for p in order:
-        if p["callsign"] and not p["ground"] and p["callsign"] not in route_cache:
+        if is_flight(p["callsign"]) and not p["ground"] and p["callsign"] not in route_cache:
             return p["callsign"]
     return None
 
@@ -443,9 +494,11 @@ def fetch_positions():
         next_positions = badge.ticks + REFRESH_MS
     except (OSError, ValueError, KeyError, TypeError, RuntimeError) as e:
         fault = "%s %s" % (type(e).__name__, e)
-        next_positions = badge.ticks + RETRY_MS
+        refused = "429" in str(e)
+        next_positions = badge.ticks + (RATE_PAUSE_MS if refused else RETRY_MS)
     records = None
     data = None
+    gc.collect()
 
 
 def fetch_route(callsign):
@@ -475,6 +528,22 @@ def go_demo(reason):
     route_order.extend(DEMO_ROUTES)
 
 
+def blocking(text, request, *args):
+    """Run a request that stalls the frame loop, showing `text` first.
+
+    A request can take seconds and nothing is drawn or read meanwhile, so the
+    frame is presented before it starts.
+    """
+    global busy
+    busy = text
+    draw_frame()
+    display.update()
+    try:
+        request(*args)
+    finally:
+        busy = None
+
+
 def network_step():
     """At most one blocking request per call, spaced out by the timers."""
     global next_net, fault, next_positions, wifi_wait_from
@@ -482,7 +551,7 @@ def network_step():
     if DEMO:
         if now >= next_positions:
             set_planes(demo_aircraft((now - started) // 1000))
-            next_positions = now + REFRESH_MS // 4
+            next_positions = now + DEMO_REFRESH_MS
         return
     if now < next_net:
         return
@@ -499,12 +568,12 @@ def network_step():
         return
     wifi_wait_from = None
     if now >= next_positions:
-        fetch_positions()
+        blocking("fetching aircraft...", fetch_positions)
         next_net = badge.ticks + ROUTE_GAP_MS
     elif now >= route_pause_until:
         callsign = wanted_route()
         if callsign:
-            fetch_route(callsign)
+            blocking("route %s..." % callsign, fetch_route, callsign)
             next_net = badge.ticks + ROUTE_GAP_MS
 
 
@@ -540,11 +609,25 @@ def route_text(p):
     return "%s > %s" % (r["o"][0] if r["o"] else "?", r["d"][0] if r["d"] else "?")
 
 
+def ago_text(seconds):
+    return "%ds" % seconds if seconds < 100 else "%dm" % (seconds // 60)
+
+
+def overhead_index():
+    """Index of the nearest airborne aircraft if it is within OVERHEAD_NM."""
+    for i, p in enumerate(planes):
+        if not p["ground"]:
+            return i if p["dist"] <= OVERHEAD_NM else None
+    return None
+
+
 def draw_bar():
     screen.pen = BAR_BG
     screen.rectangle(0, 0, W, BAR)
     put("overhead", 4, 1, LIME)
-    if fault:
+    if busy:
+        text, pen = fit(busy, 190), LIME
+    elif fault:
         text, pen = fit(fault, 190), RED
     elif DEMO:
         text, pen = fit(demo_reason, 190), AMBER
@@ -552,7 +635,7 @@ def draw_bar():
         text, pen = "loading...", DIM
     else:
         ago = (badge.ticks - fetched_at) // 1000
-        text, pen = "%d nm  %d ac  %ds ago" % (RADIUS, len(planes), ago), DIM
+        text, pen = "%d nm  %d ac  %s ago" % (RADIUS, len(planes), ago_text(ago)), DIM
     put_right(text, W - 4, 1, pen)
 
 
@@ -564,9 +647,13 @@ def draw_list():
     top = BAR + 18
     rows = (H - top) // ROW_H
     first = max(0, min(selected - rows // 2, len(planes) - rows))
+    over = overhead_index()
     for i in range(first, min(len(planes), first + rows)):
         p = planes[i]
         y = top + (i - first) * ROW_H
+        if i == over:
+            screen.pen = AMBER
+            screen.rectangle(0, y - 1, 2, ROW_H)
         if i == selected:
             screen.pen = GRID
             screen.rectangle(0, y - 1, LIST_W, ROW_H)
@@ -605,12 +692,12 @@ def draw_detail():
             put(fit(end[3] or end[0] if end else "unknown", W - x - 4), x, y, DIM)
         y += 8
     else:
-        known = p["callsign"] in route_cache
+        known = p["callsign"] in route_cache or p["ground"] or not is_flight(p["callsign"])
         put("no route" if known else "route...", x, y, DIM)
         y += 8
     y += 14
 
-    draw_row("type", p["type"] or "?", y)
+    draw_row("type", type_name(p["type"]), y)
     y += 14
     draw_row("alt", alt_text(p["alt"], p["ground"]) + (" ft" if p["alt"] is not None and p["alt"] < 18000 else ""), y)
     y += 14
@@ -622,10 +709,14 @@ def draw_detail():
     y += 14
     draw_row("range", "%.1f nm %s" % (p["dist"], compass(p["brg"])), y)
     y += 14
+    closing = closing_kt(p)
+    if closing is not None:
+        draw_row("closing" if closing >= 0 else "opening", "%d kt" % abs(round(closing)), y)
+        y += 14
     draw_row("basis", p["why"], y, DIM)
     y += 14
-    if p["reg"]:
-        draw_row("reg", p["reg"], y, DIM)
+    if p["reg"] or p["mil"]:
+        draw_row("reg", (p["reg"] + " MIL").strip() if p["mil"] else p["reg"], y, DIM)
 
 
 def arrow(x, y, trk, size, pen):
@@ -643,18 +734,19 @@ def arrow(x, y, trk, size, pen):
 def draw_radar():
     cx, cy = W // 2, BAR + (H - BAR) // 2
     r = (H - BAR) // 2 - 6
-    scale = r / RADIUS
+    view_nm = max(1, round(RADIUS * VIEWS[view]))
+    scale = r / view_nm
     for k in (1, 2, 3):
         screen.pen = GRID
         screen.shape(shape.arc(cx, cy, r * k / 3 - 1, r * k / 3, 0, 360))
     screen.line(cx - r, cy, cx + r, cy)
     screen.line(cx, cy - r, cx, cy + r)
     put("N", cx + 4, cy - r - 2, DIM)
-    put_right("%d nm" % RADIUS, W - 4, BAR + 2, DIM)
+    put_right("%d nm" % view_nm, W - 4, BAR + 2, DIM)
 
     elapsed = 0.0
     if fetched_at is not None:
-        elapsed = min(60.0, (badge.ticks - fetched_at) / 1000.0)
+        elapsed = min(EXTRAPOLATE_S, (badge.ticks - fetched_at) / 1000.0)
     sel = None
     for i, p in enumerate(planes):
         e = p["e"] + p["ve"] * elapsed
@@ -689,25 +781,31 @@ def draw_radar():
         put(line, 4, H - BAR + 1, WHITE)
 
 
-def update():
-    global radar
+def draw_frame():
     screen.pen = BG
     screen.clear()
-
-    if badge.pressed(BUTTON_UP):
-        pick(-1)
-    if badge.pressed(BUTTON_DOWN):
-        pick(1)
-    if badge.pressed(BUTTON_SELECT):
-        radar = not radar
-    network_step()
-
     if radar:
         draw_radar()
     else:
         draw_list()
         draw_detail()
     draw_bar()
+
+
+def update():
+    global radar, view
+    if badge.pressed(BUTTON_UP):
+        pick(-1)
+    if badge.pressed(BUTTON_DOWN):
+        pick(1)
+    if badge.pressed(BUTTON_SELECT):
+        radar = not radar
+    if radar and badge.pressed(BUTTON_RIGHT):
+        view = min(len(VIEWS) - 1, view + 1)
+    if radar and badge.pressed(BUTTON_LEFT):
+        view = max(0, view - 1)
+    network_step()
+    draw_frame()
 
     if badge.pressed(BUTTON_BACK):
         reset()

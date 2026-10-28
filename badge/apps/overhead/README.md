@@ -10,11 +10,12 @@ Controls:
 
 * Up and Down pick an aircraft.
 * Select switches between the list with detail, and the radar.
+* Left and right change the radar range (full, half, quarter of the fetch radius).
 * Back exits.
 
-The list is sorted by distance and shows callsign, type, altitude and ground speed in knots. Altitude is feet, or a flight level (FL350) from 18,000 ft. The detail panel adds the route, heading, vertical rate, range and bearing from you, and why it was marked arriving or departing. The radar has you in the centre, north up, with rings at a third of the range. Aircraft are arrows pointing along their track and move between updates. The selected one is lime. Arrows are green for arriving, amber for departing, blue for level flight and grey on the ground.
+The list is sorted by distance and shows callsign, type, altitude and ground speed in knots. Altitude is feet, or a flight level (FL350) from 18,000 ft. The detail panel adds the route, the aircraft type name (a small table, otherwise the code), heading, vertical rate, range and bearing from you, how fast it is closing on or moving away from you, and why it was marked arriving or departing. An amber bar at the left of a list row means the nearest airborne aircraft is within 2 nm. The radar has you in the centre, north up, with rings at a third of the range. Aircraft are arrows pointing along their track and move between updates. The selected one is lime. Arrows are green for arriving, amber for departing, blue for level flight and grey on the ground.
 
-Positions refresh about every 12 seconds. Each request blocks the screen for about a second, so route lookups run one at a time, 4 seconds apart, for the nearest aircraft and the one selected. Routes are cached per callsign. Many aircraft have no known route, and the detail panel then shows "no route".
+Positions refresh every 2 minutes and the radar moves aircraft along their track in between. Each request blocks the screen for about a second, so the app draws a frame with "fetching aircraft..." in the top bar first. Route lookups run one at a time, 4 seconds apart, for the nearest aircraft and the one selected, and only for airline style callsigns (three letters then a digit, like UAL928), since adsbdb does not know the rest. Routes are cached per callsign. Many aircraft have no known route, and the detail panel then shows "no route".
 
 ## How arriving and departing is decided
 
@@ -27,7 +28,7 @@ Vertical rate is the barometric rate, or the geometric one when that is missing.
 
 ## Notes
 
-The data size is about 500 bytes per aircraft. A 25 nm circle near a major airport returned 83 aircraft (42 KB), which is why the default radius is 15 nm and the radius is capped at 40. Only the nearest 40 aircraft are kept. Both services are free and need no key, but adsb.lol says it may require a key in future and asks production users to contact them. The app sends one position request per 12 seconds. adsb.lol returned a rate limit header of `4, 4;w=1, 60;w=60, 500;w=86400`. If that is a daily cap of 500 requests per address, one position request per 12 seconds uses 500 in about 100 minutes. The meaning of that header is not documented, so the app shows the HTTP error on screen if it gets refused.
+The data size is about 500 bytes per aircraft. A 25 nm circle near a major airport returned 83 aircraft (42 KB), which is why the default radius is 15 nm and the radius is capped at 40. Only the nearest 40 aircraft are kept. Both services are free and need no key, but adsb.lol says it may require a key in future and asks production users to contact them. adsb.lol sent a rate limit header of `4, 4;w=1, 60;w=60, 500;w=86400`. Third party clients read it as 4 requests a second, 60 a minute and 500 a day per IP address (adsb.lol does not document it). Conference Wi-Fi often shares one address between many badges, so the app asks once every 2 minutes (240 requests in 8 hours) and waits 10 minutes after an HTTP 429. If the shared address is already over its cap, the top bar shows `OSError HTTP 429` and the app keeps retrying slowly; use demo mode (`PLANES_DEMO = 1`) then.
 
 Everything in `secrets.py` stays in plain text on the badge. Never commit real values.
 

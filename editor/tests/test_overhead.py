@@ -36,7 +36,8 @@ def load(path=APP, secrets_values=None):
         "shape": mock.MagicMock(), "vec2": lambda x, y: (x, y),
         "run": lambda f: None, "reset": mock.MagicMock(),
         "HIRES": 1, "VSYNC": 2, "BUTTON_UP": "up", "BUTTON_DOWN": "down",
-        "BUTTON_SELECT": "sel", "BUTTON_BACK": "back", "__name__": "overhead_app",
+        "BUTTON_SELECT": "sel", "BUTTON_BACK": "back", "BUTTON_LEFT": "left",
+        "BUTTON_RIGHT": "right", "display": mock.MagicMock(), "__name__": "overhead_app",
     }
     with open(path) as f:
         exec(compile(f.read(), path, "exec"), ns)
@@ -386,9 +387,175 @@ class Behaviour(unittest.TestCase):
         self.assertGreater(a["route_pause_until"], 5)
 
 
+class Blocking(unittest.TestCase):
+    """A request stalls the frame loop, so a frame must be presented first."""
+
+    def wifi_app(self):
+        a = load()
+        w = types.ModuleType("wifi")
+        w.is_connected = lambda: True
+        w.connect = lambda: True
+        a["wifi"] = w
+        return a
+
+    def test_first_frame_is_shown_before_the_first_request(self):
+        a = self.wifi_app()
+        events = []
+        a["display"].update.side_effect = lambda: events.append(("present", a["busy"]))
+
+        def get(url, headers=None, timeout=None):
+            events.append(("request", a["busy"]))
+            raise OSError("stalled")
+        a["requests"].get = get
+        a["badge"].ticks = 1000
+        a["update"]()
+        self.assertEqual(events[0], ("present", "fetching aircraft..."))
+        self.assertEqual(events[1], ("request", "fetching aircraft..."))
+        self.assertIsNone(a["busy"])
+        self.assertIn("stalled", a["fault"])
+        # the screen was cleared and drawn before that first present
+        self.assertTrue(a["screen"].clear.called)
+
+    def test_route_lookup_is_announced_too(self):
+        a = self.wifi_app()
+        a["set_planes"](j("overhead_adsblol.json")["ac"])
+        seen = []
+
+        class R:
+            status_code = 404
+            def json(self): return {}
+            def close(self): pass
+        a["requests"].get = lambda url, headers=None, timeout=None: (seen.append(a["busy"]), R())[1]
+        a["next_positions"] = 10 ** 9
+        a["badge"].ticks = 5000
+        a["update"]()
+        self.assertTrue(seen and seen[0].startswith("route "))
+
+    def test_429_backs_off_for_minutes(self):
+        a = self.wifi_app()
+        a["badge"].ticks = 1000
+
+        class R:
+            status_code = 429
+            def json(self): return {}
+            def close(self): pass
+        a["requests"].get = lambda url, headers=None, timeout=None: R()
+        a["fetch_positions"]()
+        self.assertEqual(a["fault"], "OSError HTTP 429")
+        self.assertEqual(a["next_positions"], 1000 + a["RATE_PAUSE_MS"])
+
+    def test_refresh_fits_500_a_day_over_8_hours(self):
+        a = load()
+        self.assertLessEqual(8 * 3600 * 1000 / a["REFRESH_MS"], 300)
+
+
+class SanFrancisco(unittest.TestCase):
+    """Synthetic records shaped like real adsb.lol ones, around the venue."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = load()
+
+    def plane(self, **kw):
+        rec = {"hex": "a1b2c3", "lat": 37.78, "lon": -122.40, "alt_baro": 2500,
+               "gs": 160, "track": 290, "baro_rate": -700, "flight": "UAL928  ", "t": "B738"}
+        rec.update(kw)
+        rec = {k: v for k, v in rec.items() if v is not None}
+        return self.app["parse_aircraft"](rec, 37.8068, -122.4315)
+
+    def test_sfo_arrival_and_departure_without_route(self):
+        a = self.app
+        self.assertEqual(a["classify"](self.plane(), None)[0], "ARR")
+        self.assertEqual(a["classify"](self.plane(baro_rate=1800), None)[0], "DEP")
+
+    def test_sfo_route_with_iata_codes(self):
+        a = self.app
+        route = a["parse_route"]({"response": {"flightroute": {
+            "origin": {"iata_code": "LAX", "icao_code": "KLAX", "latitude": 33.94, "longitude": -118.41, "municipality": "Los Angeles"},
+            "destination": {"iata_code": "SFO", "icao_code": "KSFO", "latitude": 37.62, "longitude": -122.38, "municipality": "San Francisco"}}}})
+        self.assertEqual(a["route_text"]({"route": route}), "LAX > SFO")
+        self.assertEqual(a["classify"](self.plane(baro_rate=None), route), ("ARR", "route"))
+
+    def test_helicopter_no_callsign_no_rate(self):
+        p = self.plane(flight=None, t="EC35", r="N911SF", baro_rate=None, alt_baro=800, gs=70)
+        self.assertEqual(p["call"], "N911SF")
+        self.assertEqual(self.app["classify"](p, None), ("LVL", "no vertical rate"))
+        self.assertFalse(self.app["is_flight"](p["callsign"]))
+
+    def test_ground_string_and_missing_altitude(self):
+        p = self.plane(alt_baro="ground", baro_rate=None)
+        self.assertTrue(p["ground"])
+        self.assertEqual(self.app["classify"](p, None)[0], "GND")
+        p = self.plane(alt_baro=None)
+        self.assertIsNone(p["alt"])
+        self.assertEqual(self.app["alt_text"](p["alt"], p["ground"]), "--")
+
+    def test_military_flag(self):
+        self.assertTrue(self.plane(dbFlags=1)["mil"])
+        self.assertFalse(self.plane(dbFlags=2)["mil"])
+        self.assertFalse(self.plane()["mil"])
+
+    def test_route_lookups_only_for_airline_callsigns(self):
+        is_flight = self.app["is_flight"]
+        for call in ("UAL928", "RYR88AC", "BAW8", "FDX1234"):
+            self.assertTrue(is_flight(call), call)
+        for call in ("", "N123AB", "GBRDM", "TWR", "ABC", "00000000"):
+            self.assertFalse(is_flight(call), call)
+
+    def test_type_names(self):
+        a = self.app
+        self.assertEqual(a["type_name"]("B738"), "737-800")
+        self.assertEqual(a["type_name"]("E75L"), "E175")
+        self.assertEqual(a["type_name"]("ZZZZ"), "ZZZZ")
+        self.assertEqual(a["type_name"](""), "?")
+        for name in a["TYPE_NAMES"].values():
+            self.assertLessEqual(len(name), 13)
+
+    def test_closing_speed(self):
+        a = self.app
+        # due east of the centre, flying west at 360 kt: closing 360
+        p = a["parse_aircraft"]({"hex": "x", "lat": 0.0, "lon": 0.05, "gs": 360, "track": 270, "alt_baro": 1000}, 0.0, 0.0)
+        self.assertAlmostEqual(a["closing_kt"](p), 360, delta=2)
+        p["trk"] = 90
+        p["ve"] = -p["ve"]
+        self.assertAlmostEqual(a["closing_kt"](p), -360, delta=2)
+        self.assertIsNone(a["closing_kt"](dict(p, gs=None)))
+
+    def test_overhead_marker_picks_nearest_airborne_only(self):
+        a = load()
+        near_ground = {"hex": "g", "lat": a["LAT"] + 0.001, "lon": a["LON"], "alt_baro": "ground"}
+        near_air = {"hex": "h", "lat": a["LAT"] + 0.01, "lon": a["LON"], "alt_baro": 1500, "gs": 60, "track": 0}
+        far_air = {"hex": "i", "lat": a["LAT"] + 0.2, "lon": a["LON"], "alt_baro": 3000}
+        a["set_planes"]([far_air, near_air, near_ground])
+        self.assertEqual(a["planes"][a["overhead_index"]()]["id"], "h")
+        a["set_planes"]([far_air])
+        self.assertIsNone(a["overhead_index"]())
+
+    def test_radar_zoom_buttons(self):
+        a = load(secrets_values={"PLANES_DEMO": "1"})
+        a["badge"].ticks = 1000
+        a["radar"] = True
+        a["badge"].pressed.side_effect = lambda b: b == "right"
+        a["update"]()
+        a["update"]()
+        a["update"]()
+        self.assertEqual(a["view"], len(a["VIEWS"]) - 1)
+        a["badge"].pressed.side_effect = lambda b: b == "left"
+        for _ in range(5):
+            a["update"]()
+        self.assertEqual(a["view"], 0)
+
+    def test_detail_draws_for_every_demo_plane(self):
+        a = load(secrets_values={"PLANES_DEMO": "1"})
+        a["badge"].ticks = 1000
+        for i in range(8):
+            a["badge"].pressed.side_effect = lambda b: b == "down"
+            a["update"]()
+
+
 class FilesInSync(unittest.TestCase):
     def test_editor_copy_matches_app(self):
-        app = os.path.join(HERE, "..", "..", "repo", "badge", "apps", "overhead", "__init__.py")
+        app = os.path.join(HERE, "..", "..", "badge", "apps", "overhead", "__init__.py")
         with open(app) as f1, open(APP) as f2:
             self.assertEqual(f1.read(), f2.read())
 
