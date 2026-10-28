@@ -17,6 +17,34 @@ None of this has run on a real badge yet. Everything below passes static checks 
 
 `validate_app.py` and the README check pass for all six. The `editor/` folder holds single-file copies you can paste into the [browser editor](https://badger.github.io/editor) plus host-side tests. In the simulator the accelerometer is a stub (use the d-pad for `tilt_maze`), and there is no IR, network or BLE, so the other apps run on demo data.
 
+## Screenshots
+
+Captured from the [badge simulator](https://badger.github.io/editor) running each app in headless Chrome, not from a real badge. Frames are the simulator's screen, doubled in size. The simulator has no real accelerometer, IR, sockets or network, so `tilt_maze` was rolled with the d-pad, `ir_tag` shows its simulator controls, and `aprs_map`, `gh_dash` and `overhead` show demo data (the `overhead` captures use `PLANES_DEMO`). `meshcore_feed` is its demo mode.
+
+**tilt_maze**: start, then rolling toward the gold tile
+
+<img src="docs/screenshots/tilt_maze-start.png" width="320" alt="tilt_maze start"> <img src="docs/screenshots/tilt_maze-rolling.png" width="320" alt="tilt_maze rolling">
+
+**ir_tag**: after a confirmed hit, then after being tagged
+
+<img src="docs/screenshots/ir_tag-confirmed.png" width="320" alt="ir_tag hit confirmed"> <img src="docs/screenshots/ir_tag-tagged.png" width="320" alt="ir_tag tagged">
+
+**gh_dash**: review requests, PRs, issues and CI
+
+<img src="docs/screenshots/gh_dash-dashboard.png" width="320" alt="gh_dash demo dashboard">
+
+**aprs_map**: stations with trails, then zoomed on a selected station
+
+<img src="docs/screenshots/aprs_map-trails.png" width="320" alt="aprs_map trails"> <img src="docs/screenshots/aprs_map-zoomed.png" width="320" alt="aprs_map zoomed">
+
+**overhead**: list with detail, then the radar
+
+<img src="docs/screenshots/overhead-list.png" width="320" alt="overhead list and detail"> <img src="docs/screenshots/overhead-radar.png" width="320" alt="overhead radar">
+
+**meshcore_feed**: start screen, then demo messages
+
+<img src="docs/screenshots/meshcore_feed-start.png" width="320" alt="meshcore_feed start"> <img src="docs/screenshots/meshcore_feed-messages.png" width="320" alt="meshcore_feed messages">
+
 ## Quick setup
 
 1. Install the tool: `python3 -m pip install mpremote` (use a venv if pip refuses).
@@ -45,10 +73,11 @@ Wi-Fi and your GitHub username can be set in the badge's Settings app. Everythin
 | `GITHUB_USERNAME` | `gh_dash` | |
 | `GITHUB_TOKEN` | `gh_dash` | fine-grained, read-only, short expiry |
 | `DASH_REPOS` | `gh_dash` | optional, `"owner/repo,owner/other"`, up to 3 |
-| `MAP_LAT`, `MAP_LON` | `aprs_map`, `overhead` | decimal degrees. No default location, demo data without them. |
+| `MAP_LAT`, `MAP_LON` | `aprs_map`, `overhead` | optional, decimal degrees. Defaults to the GitHub Universe 2026 venue (37.8068, -122.4315). |
 | `MAP_RADIUS_KM` | `aprs_map` | optional, default 25 |
 | `PLANES_RADIUS_NM` | `overhead` | optional, default 15, range 3 to 40 |
 | `APRS_CALLSIGN` | `aprs_map` | optional, goes in the APRS-IS login line, defaults to `N0CALL` |
+| `APRS_DEMO`, `PLANES_DEMO` | `aprs_map`, `overhead` | optional, set to `1` to force demo data |
 
 `secrets.py` is plain text on a device other people pick up. Use a token that can only read what the dashboard needs, and never commit real values. `badge/secrets.py` in this repo stays empty.
 
