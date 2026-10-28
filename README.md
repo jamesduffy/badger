@@ -1,217 +1,74 @@
-# GitHub Universe Badge
+# GitHub Universe 2026 badge: my apps
 
-This repository now targets the **GitHub Universe 2026 badge**. The current
-badge filesystem lives in [`badge/`](./badge/) and is intended to be copied to
-the badge's `/system` partition.
+Six extra apps for the GitHub Universe 2026 badge, on top of the stock firmware tree from [badger/home](https://github.com/badger/home). Games, a GitHub dashboard, and a few radio and aviation toys: APRS stations on a map, planes overhead, and a MeshCore message viewer.
 
-The Universe 2025 sources remain available in [`badge25/`](./badge25/) for
-people using the previous badge.
+None of this has run on a real badge yet. Everything below passes static checks and host-side tests only. Each app's status is in the table, and I'll update it as I test.
 
-## Repository layout
+## Apps
 
-| Path | Purpose |
-| --- | --- |
-| [`badge/`](./badge/) | Universe 2026 `/system` files and apps |
-| [`badge25/`](./badge25/) | Archived Universe 2025 files, docs, simulator, and apps |
-| [`hardware/`](./hardware/) | Universe 2026 schematic and hardware/GPIO reference |
-| [`eink/`](./eink/) | Earlier e-ink badge resources |
-| [`ir-beacon/`](./ir-beacon/) | IR beacon utilities and protocol experiments |
+| App | What it does | Needs network | Status |
+| --- | --- | --- | --- |
+| [`tilt_maze`](badge/apps/tilt_maze/) | Roll a marble through a random maze with the accelerometer. 4 sizes, best times saved. | no | maze generator tested on host, tilt axes unconfirmed |
+| [`ir_tag`](badge/apps/ir_tag/) | Fire IR shots at other badges. A hit badge sends a confirmation back. | no | IR send API is a guess |
+| [`gh_dash`](badge/apps/gh_dash/) | Review requests, open PRs, assigned issues, latest CI result for up to 3 repos. | Wi-Fi + GitHub token | demo mode works, live calls untested |
+| [`aprs_map`](badge/apps/aprs_map/) | Live map of APRS stations near a place you choose, with fading trails. Receive only. | Wi-Fi | parser tested on host and against the live feed |
+| [`overhead`](badge/apps/overhead/) | Aircraft near you: callsign, type, altitude, speed, origin and destination, arriving or departing. List and radar views. | Wi-Fi | parser tested on saved real responses |
+| [`meshcore_feed`](badge/apps/meshcore_feed/) | MeshCore messages and contacts from your own BLE companion node. | BLE | prototype, about 25% odds the badge can pair |
 
-The legacy simulator and Badgeware API documentation are under `badge25/`.
-They do not model the 2026 graphics and input APIs.
+`validate_app.py` and the README check pass for all six. The `editor/` folder holds single-file copies you can paste into the [browser editor](https://badger.github.io/editor) plus host-side tests. In the simulator the accelerometer is a stub (use the d-pad for `tilt_maze`), and there is no IR, network or BLE, so the other apps run on demo data.
 
-## Examples
+## Quick setup
 
-The [Apps](./badge/apps/) is folder contains all the applications that ship on the badge along
-with others from the stock Pimoroni Tufty 2350 badge the GitHub Universe badge is based on. It 
-also contains a number of community submitted applications for you to experiment with.
+1. Install the tool: `python3 -m pip install mpremote` (use a venv if pip refuses).
+2. Plug in the badge with a data-capable USB-C cable and find it: `mpremote devs` (USB id `2e8a:1101`).
+3. Put it in disk mode: `mpremote connect "$PORT" exec "import powman; powman.reset_into_msc()"`. A `Device not configured` error afterwards is expected. The Mass Storage app or a double-tap on reset also work.
+4. While still in serial mode, check the menu draws custom icons:
+   `mpremote connect "$PORT" exec "print('load_picture' in open('/system/apps/menu/app.py').read())"`.
+   If it prints `False`, also copy `badge/apps/menu/app.py` to the volume in the next step, otherwise the new apps get the default icon.
+5. Copy the apps to the `BADGER` volume. Its root is the badge's `/system`, so apps go in `apps/`. Never copy to the `RP2350` drive, that is the bootloader.
 
-## Pimoroni and Badgeware resources
-
-- [Tufty 2350 product page and specifications](https://shop.pimoroni.com/products/tufty-2350)
-- [`pimoroni/tufty2350`](https://github.com/pimoroni/tufty2350) firmware,
-  board definitions, modules, and examples
-- [`pimoroni/badgeware-docs`](https://github.com/pimoroni/badgeware-docs)
-  Badgeware documentation and examples
-- [`pimoroni/badgeware-simulator`](https://github.com/pimoroni/badgeware-simulator)
-  desktop Badgeware Simulator
-- [`pimoroni/badgeware-web-simulator`](https://github.com/pimoroni/badgeware-web-simulator)
-  browser-based Badgeware Simulator
-
-These upstream simulators and documents are useful references for the Tufty
-and Badgeware ecosystem, but they do not model GitHub's custom 2026
-accelerometer, IR, capacitive controls, or firmware APIs exactly. Test those
-features on a Universe 2026 badge.
-
-## Universe 2026 badge
-
-The 2026 badge is a custom derivative of Pimoroni's
-[Tufty 2350](https://shop.pimoroni.com/products/tufty-2350), part of the
-[Badger, Tufty, and Blinky digital badge crew](https://badgewa.re/). It
-retains Tufty's RP2350B, 320x240 colour LCD, 8 MB PSRAM, 16 MB flash, wireless
-module, battery, case lighting, light sensor, and Qw/ST expansion connector.
-
-The GitHub Universe version extends that platform with hardware designed for
-interactive games and badge-to-badge experiences:
-
-- An onboard LSM6DS3TR-C accelerometer and gyroscope.
-- IR transmit and receive hardware.
-- Eight capacitive touch controls: a directional pad plus Select, Back, Menu,
-  and Home pads.
-- Five physical front controls that work with the touch controls through the
-  firmware's orientation-aware logical input API.
-
-The firmware automatically handles screen orientation and exposes logical
-input actions. Apps should use `BUTTON_UP`, `BUTTON_DOWN`, `BUTTON_LEFT`,
-`BUTTON_RIGHT`, `BUTTON_SELECT`, `BUTTON_BACK`, `BUTTON_MENU`, and
-`BUTTON_HOME` with `badge.pressed()`, `badge.held()`, and `badge.released()`.
-Do not hard-code a physical control based on which end of the badge is
-currently uppermost.
-
-See the complete [Universe 2026 hardware reference](./hardware/README.md) for
-the RP2350 GPIO map and onboard peripheral connections. See the
-[USB serial and MicroPython REPL guide](./hardware/USB_SERIAL.md) to inspect a
-connected badge and copy files or apps.
-
-## Skills for building 2026 apps
-
-The [`hyb26-skill`](./.github/skills/hyb26-skill/SKILL.md) Copilot skill helps
-you create, check, debug, and install apps on your badge from macOS, Linux, or
-Windows. Copilot picks it up automatically in this repository. It covers
-`mpremote` and the REPL, switching the badge into USB Disk Mode from your
-computer, enabling custom `icon.png` menu icons on stock badges, and the
-[badger.github.io simulator](https://badger.github.io/editor). See its
-[README](./.github/skills/hyb26-skill/README.md) to install it for other
-projects.
-
-## Creating a 2026 app
-
-Apps are directories under `badge/apps/`:
-
-```text
-badge/apps/my_app/
-├── __init__.py
-├── icon.png
-└── assets/
+```bash
+cp -R badge/apps/{tilt_maze,ir_tag,gh_dash,aprs_map,overhead,meshcore_feed} /Volumes/BADGER/apps/
+diskutil eject /Volumes/BADGER
+mpremote connect "$PORT" reset
 ```
 
-`icon.png` should be a 24x24 PNG. A minimal application is:
+The repo's `.github/skills/hyb26-skill/scripts/` has helpers for the same steps (`badge_serial.py`, `deploy_app.py`, `patch_menu_icons.py`, `validate_app.py`). The deploy and patch scripts preview by default and need `--write`.
 
-```python
-import os
-import sys
+## Settings the apps read
 
-APP_DIR = "/system/apps/my_app"
-os.chdir(APP_DIR)
-sys.path.insert(0, APP_DIR)
+Wi-Fi and your GitHub username can be set in the badge's Settings app. Everything else goes in `secrets.py`. I haven't confirmed whether the Settings app writes `/secrets.py` or `/system/secrets.py`, so check both with `mpremote connect "$PORT" fs cat :/secrets.py` and add lines to the one that holds your Wi-Fi values.
 
-screen.font = font.nope
+| Name | Used by | Notes |
+| --- | --- | --- |
+| `WIFI_SSID`, `WIFI_PASSWORD` | `gh_dash`, `aprs_map`, `overhead` | |
+| `GITHUB_USERNAME` | `gh_dash` | |
+| `GITHUB_TOKEN` | `gh_dash` | fine-grained, read-only, short expiry |
+| `DASH_REPOS` | `gh_dash` | optional, `"owner/repo,owner/other"`, up to 3 |
+| `MAP_LAT`, `MAP_LON` | `aprs_map`, `overhead` | decimal degrees. No default location, demo data without them. |
+| `MAP_RADIUS_KM` | `aprs_map` | optional, default 25 |
+| `PLANES_RADIUS_NM` | `overhead` | optional, default 15, range 3 to 40 |
+| `APRS_CALLSIGN` | `aprs_map` | optional, goes in the APRS-IS login line, defaults to `N0CALL` |
 
+`secrets.py` is plain text on a device other people pick up. Use a token that can only read what the dashboard needs, and never commit real values. `badge/secrets.py` in this repo stays empty.
 
-def update():
-    screen.pen = color.rgb(20, 24, 28)
-    screen.rectangle(screen.clip)
+## Things I'm checking on hardware
 
-    screen.pen = color.rgb(255, 255, 255)
-    screen.text("Hello Universe!", 10, 10)
+- **IR send API.** The repo only shows the receiver. `ir_tag` assumes `NECSender(16, 1)` with `send_addr_cmd(addr, cmd)`, copied from the 2025 beacon code. Check with `import aye_arr.nec as n; print(dir(n))`. Without a working sender the app runs receive only and says so.
+- **Tilt direction.** Axis mapping is copied from the stock Badge app. If the ball rolls backwards, flip a sign in `Tilt.read()`.
+- **BLE pairing.** MeshCore needs a bonded, encrypted link with a PIN. MicroPython only documents that on NimBLE, and the badge probably uses BTstack. If `ble.config(bond=True, ...)` raises, the live mode is dead. See [`editor/meshcore-feasibility.md`](editor/meshcore-feasibility.md) for sources.
+- **Sockets and RAM.** `aprs_map` connects over a raw TCP socket (the first connect can block a few seconds). `overhead` parses 40 KB or more of JSON. Lower `PLANES_RADIUS_NM` if it runs out of memory.
+- **Screen layout.** Text widths and column positions are guessed and checked only against stub globals.
 
-    if badge.pressed(BUTTON_SELECT):
-        print("Selected")
+## Data sources and limits
 
+- **APRS:** the [APRS-IS](https://www.aprs-is.net/) network via `rotate.aprs2.net:14580`, with a server-side range filter and a receive-only login (passcode `-1`). The app never transmits. I skipped the aprs.fi API because it can't search by area and its terms forbid pre-caching.
+- **Aircraft positions:** [adsb.lol](https://api.adsb.lol), open data under the [ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/). No key today, but they say one may be required later. It returned a rate-limit header that might mean 500 requests per day per address, which one request every 12 s would use up in about 100 minutes. If `overhead` starts showing HTTP errors, raise `REFRESH_MS`.
+- **Aircraft routes:** [adsbdb](https://www.adsbdb.com), looked up by callsign and cached. Callsigns get reused, so arriving and departing is a good guess, not a fact. How the app decides is in [`badge/apps/overhead/README.md`](badge/apps/overhead/README.md).
+- **MeshCore:** the documented companion protocol from [meshcore-dev](https://github.com/meshcore-dev). Live mode can send a real message on your mesh when you pick a canned reply.
 
-run(update)
-```
+## Upstream and license
 
-The runtime supplies commonly used graphics and badge objects as globals,
-including `badge`, `screen`, `image`, `font`, `color`, `shape`, `brush`,
-`vec2`, `rect`, `mat3`, `run`, button constants, mode constants, and filesystem
-helpers. Inspect the apps in [`badge/apps/`](./badge/apps/) for working
-patterns.
+This is a fork of [badger/home](https://github.com/badger/home), the GitHub Universe 2026 badge firmware tree, which is based on Pimoroni's [Tufty 2350](https://shop.pimoroni.com/products/tufty-2350). The original README is in `UPSTREAM_README.md`. For the 2026 API, read [`badge/AGENTS.md`](badge/AGENTS.md) and [`hardware/README.md`](hardware/README.md) first, and don't use `badge25/` patterns.
 
-### Badge Simulator canvas
-
-If you use the GitHub Copilot app, this repository includes a **Badge
-Simulator** canvas that loads automatically. Ask Copilot to "open the Badge
-Simulator for my_app": your app runs on a 3D badge beside the chat and reloads
-every time you save. **Deploy** asks Copilot to install it on a connected badge.
-See [`.github/extensions/badge-simulator/`](./.github/extensions/badge-simulator/README.md).
-
-### Input and orientation
-
-```python
-if badge.pressed(BUTTON_SELECT):
-    activate()
-
-if badge.held(BUTTON_LEFT):
-    x -= speed * (badge.ticks_delta / 1000)
-
-if badge.released(BUTTON_BACK):
-    close_panel()
-
-if badge.touched(BUTTON_MENU):
-    show_touch_feedback()
-
-direction = badge.direction()
-upside_down = badge.upside_down()
-```
-
-Use `badge.ticks_delta` for frame-rate-independent animation and movement.
-Use `screen.width` and `screen.height` instead of assuming a resolution.
-The default logical mode used by most included apps is 160x120; apps that need
-the full display can request `badge.mode(HIRES | VSYNC)`, which provides a
-320x240 drawing surface.
-
-### Graphics
-
-```python
-sprite = image.load("assets/sprite.png")
-sheet = image.load("assets/characters.png").spritesheet(7, 2)
-
-screen.pen = color.rgb(73, 219, 255)
-screen.shape(shape.rectangle(0, 0, screen.width, screen.height))
-screen.blit(sprite, vec2(10, 10))
-screen.blit(sheet.sprite(0, 0), rect(40, 20, 32, 32))
-```
-
-Set `screen.pen` before drawing. Fonts are available through the `font`
-namespace, for example `font.nope`, `font.sins`, `font.ark`, and
-`font.ziplock`.
-
-### Persistent state
-
-```python
-from badgeware import State
-
-state = {"highscore": 0}
-State.load("my_app", state)
-
-# Save after a meaningful state change.
-State.save("my_app", state)
-```
-
-Persistent state is stored outside `/system`; do not commit runtime state or
-real Wi-Fi credentials.
-
-## Installing files on a badge
-
-Copy the contents of `badge/` to `/system/` on the Universe 2026 badge. To
-install a single app, copy its complete directory to
-`/system/apps/<app_name>/`. The menu discovers directories containing
-`__init__.py` or `__init__.mpy`.
-
-The normal MicroPython REPL mounts `/system` read-only. Use USB mass-storage
-mode for persistent deployment; `mpremote mount badge` is useful for transient
-hardware tests without copying. See
-[`hardware/USB_SERIAL.md`](./hardware/USB_SERIAL.md) for the tested workflow.
-
-The Wi-Fi template is [`badge/secrets.py`](./badge/secrets.py). Keep committed
-values empty and configure credentials only on the device.
-
-## Contributing
-
-We welcome contributions! If you've created a new app or improved an existing
-one, please consider submitting a pull request.
-
-See [`CONTRIBUTING.md`](./CONTRIBUTING.md). New development should target the
-2026 runtime under `badge/`; only compatibility fixes for the older hardware
-should be made under `badge25/`.
+MIT, same as upstream. See [`LICENSE`](LICENSE). I wrote the six apps above. The upstream project asks that contributions contain no third-party characters, art, logos or trademarks, and the apps follow that.
