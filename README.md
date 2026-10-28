@@ -9,17 +9,17 @@ None of this has run on a real badge yet. Everything below passes static checks 
 | App | What it does | Needs network | Status |
 | --- | --- | --- | --- |
 | [`tilt_maze`](badge/apps/tilt_maze/) | Roll a marble through a random maze with the accelerometer. 4 sizes, best times saved. | no | maze generator tested on host, tilt axes unconfirmed |
-| [`ir_tag`](badge/apps/ir_tag/) | Fire IR shots at other badges. A hit badge sends a confirmation back. | no | IR send API is a guess |
+| [`ir_tag`](badge/apps/ir_tag/) | Fire IR shots at other badges. A hit badge sends a confirmation back. | no | sender call fixed to the real `aye_arr` API, untested |
 | [`gh_dash`](badge/apps/gh_dash/) | Review requests, open PRs, assigned issues, latest CI result for up to 3 repos. | Wi-Fi + GitHub token | demo mode works, live calls untested |
 | [`aprs_map`](badge/apps/aprs_map/) | Live map of APRS stations near a place you choose, with fading trails. Receive only. | Wi-Fi | parser tested on host and against the live feed |
 | [`overhead`](badge/apps/overhead/) | Aircraft near you: callsign, type, altitude, speed, origin and destination, arriving or departing. List and radar views. | Wi-Fi | parser tested on saved real responses |
-| [`meshcore_feed`](badge/apps/meshcore_feed/) | MeshCore messages and contacts from your own BLE companion node. | BLE | prototype, about 25% odds the badge can pair |
+| [`meshcore_feed`](badge/apps/meshcore_feed/) | MeshCore messages and contacts from your own BLE companion node. | BLE | prototype, about 3% odds live mode can pair, demo mode works |
 
 `validate_app.py` and the README check pass for all six. The `editor/` folder holds single-file copies you can paste into the [browser editor](https://badger.github.io/editor) plus host-side tests. In the simulator the accelerometer is a stub (use the d-pad for `tilt_maze`), and there is no IR, network or BLE, so the other apps run on demo data.
 
 ## Screenshots
 
-Captured from the [badge simulator](https://badger.github.io/editor) running each app in headless Chrome, not from a real badge. Frames are the simulator's screen, doubled in size. The simulator has no real accelerometer, IR, sockets or network, so `tilt_maze` was rolled with the d-pad, `ir_tag` shows its simulator controls, and `aprs_map`, `gh_dash` and `overhead` show demo data (the `overhead` captures use `PLANES_DEMO`). `meshcore_feed` is its demo mode.
+Captured from the [badge simulator](https://badger.github.io/editor) running each app in headless Chrome, not from a real badge. Frames are the simulator's screen, doubled in size. The simulator has no real accelerometer, IR, sockets or network, so `tilt_maze` was rolled with the d-pad, `ir_tag` shows its simulator controls, and `aprs_map`, `gh_dash` and `overhead` show demo data (the `overhead` captures use `PLANES_DEMO`). `meshcore_feed` is its demo mode, and the captured start screen shows the warning that live mode probably fails.
 
 **tilt_maze**: start, then rolling toward the gold tile
 
@@ -83,16 +83,16 @@ Wi-Fi and your GitHub username can be set in the badge's Settings app. Everythin
 
 ## Things I'm checking on hardware
 
-- **IR send API.** The repo only shows the receiver. `ir_tag` assumes `NECSender(16, 1)` with `send_addr_cmd(addr, cmd)`, copied from the 2025 beacon code. Check with `import aye_arr.nec as n; print(dir(n))`. Without a working sender the app runs receive only and says so.
+- **IR library version.** `ir_tag` uses the real [`pimoroni/aye_arr`](https://github.com/pimoroni/aye_arr) API (`NECSender(pin, pio, sm)` then `.start()`, receiver via `NECRemoteReceiver` or `NECReceiver`), checked against its source but not on a badge. In `aye_arr` 1.0.x the descriptor style Quest uses moved to `NECRemoteReceiver`, so check which version the firmware ships with `import aye_arr.nec as n; print(dir(n))`. Without a working sender the app runs receive only and says so.
 - **Tilt direction.** Axis mapping is copied from the stock Badge app. If the ball rolls backwards, flip a sign in `Tilt.read()`.
-- **BLE pairing.** MeshCore needs a bonded, encrypted link with a PIN. MicroPython only documents that on NimBLE, and the badge probably uses BTstack. If `ble.config(bond=True, ...)` raises, the live mode is dead. See [`editor/meshcore-feasibility.md`](editor/meshcore-feasibility.md) for sources.
+- **BLE pairing.** MeshCore needs a bonded, encrypted link with a PIN. MicroPython only supports that on NimBLE, and the badge probably uses BTstack, so live mode most likely cannot pair (review estimate: about 3%). Demo mode works. A Wi-Fi companion node over TCP would avoid pairing. See [`editor/meshcore-feasibility.md`](editor/meshcore-feasibility.md) for sources.
 - **Sockets and RAM.** `aprs_map` connects over a raw TCP socket (the first connect can block a few seconds). `overhead` parses 40 KB or more of JSON. Lower `PLANES_RADIUS_NM` if it runs out of memory.
 - **Screen layout.** Text widths and column positions are guessed and checked only against stub globals.
 
 ## Data sources and limits
 
 - **APRS:** the [APRS-IS](https://www.aprs-is.net/) network via `rotate.aprs2.net:14580`, with a server-side range filter and a receive-only login (passcode `-1`). The app never transmits. I skipped the aprs.fi API because it can't search by area and its terms forbid pre-caching.
-- **Aircraft positions:** [adsb.lol](https://api.adsb.lol), open data under the [ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/). No key today, but they say one may be required later. It returned a rate-limit header that might mean 500 requests per day per address, which one request every 12 s would use up in about 100 minutes. If `overhead` starts showing HTTP errors, raise `REFRESH_MS`.
+- **Aircraft positions:** [adsb.lol](https://api.adsb.lol), open data under the [ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/). No key today, but they say one may be required later. It returned a rate-limit header that might mean 500 requests per day per address, so `overhead` refreshes every 2 minutes (about 240 requests in 8 hours). The header is unofficial. Venue Wi-Fi shares one IP, so the cap could still be hit. If `overhead` starts showing HTTP errors, raise `REFRESH_MS`.
 - **Aircraft routes:** [adsbdb](https://www.adsbdb.com), looked up by callsign and cached. Callsigns get reused, so arriving and departing is a good guess, not a fact. How the app decides is in [`badge/apps/overhead/README.md`](badge/apps/overhead/README.md).
 - **MeshCore:** the documented companion protocol from [meshcore-dev](https://github.com/meshcore-dev). Live mode can send a real message on your mesh when you pick a canned reply.
 
