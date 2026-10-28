@@ -197,20 +197,20 @@ def update():
     screen.pen = LIME
     screen.text("@" + USER, 12, 10)
 
-    y = 40
+    y = 38
     for item in counts:
         text = "-" if item.value is None else str(item.value)
         draw_row(item.label, text, count_colour(item), y)
-        y += 28
+        y += 26
 
     if runs:
         screen.pen = DIM
-        screen.text("CI, latest run", 12, y + 6)
-        y += 34
+        screen.text("CI, latest run", 12, y + 2)
+        y += 26
         for item in runs:
             pen, text = run_colour(item.value)
             draw_row(item.label, text, pen, y)
-            y += 28
+            y += 24
 
     draw_status(feed)
 
