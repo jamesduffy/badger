@@ -12,9 +12,10 @@ except ImportError:
     wifi = None
 
 try:
+    import select
     import socket
 except ImportError:
-    socket = None
+    select = socket = None
 
 # ---- pure logic start (no badge globals below this line until "pure logic end") ----
 
@@ -54,6 +55,8 @@ def parse_plain(body):
         lat = -lat
     if body[17] == "W":
         lon = -lon
+    if body[18] == "_":     # weather station: the comment starts with wind direction/speed
+        return lat, lon, None, None
     course, speed = course_speed(body[19:])
     return lat, lon, course, speed
 
@@ -68,7 +71,8 @@ def parse_compressed(body):
     lat = 90 - base91(body[1:5]) / 380926
     lon = -180 + base91(body[5:9]) / 190463
     course = speed = None
-    if body[10] != " ":
+    altitude = (ord(body[12]) - 33) & 0x18 == 0x10     # type byte says c/s hold altitude
+    if body[10] != " " and body[9] != "_" and not altitude:
         c = ord(body[10]) - 33
         if 0 <= c <= 89:
             course = c * 4
@@ -133,7 +137,7 @@ def parse_mice(dest, info):
     return lat, lon, course, speed * KN_TO_KMH
 
 
-def parse_packet(line):
+def parse_packet(line, inner=False):
     """TNC2 line -> dict(call, lat, lon, course, speed in km/h) or None."""
     if not line or line[0] == "#":
         return None
@@ -154,8 +158,17 @@ def parse_packet(line):
                 return None
             call = info[1:10].strip()
             fix = parse_body(info[18:])
+        elif kind == ")":
+            # item: )NAME!POSITION, a name of 3 to 9 chars, '_' instead of '!' means killed
+            end = info.find("!", 4, 11)
+            if end < 0:
+                return None
+            call = info[1:end]
+            fix = parse_body(info[end + 1:])
         elif kind in "`'":
             fix = parse_mice(dest, info)
+        elif kind == "}" and not inner:
+            return parse_packet(info[1:], True)     # third-party: the real packet is inside
         else:
             return None
     except (ValueError, IndexError):
@@ -265,8 +278,8 @@ BAR = 16
 MAP_TOP, MAP_BOT = BAR, H - BAR
 MAP_CX, MAP_CY = W // 2, (MAP_TOP + MAP_BOT) // 2
 
-LOGIN_TIMEOUT = 4           # seconds, the connect and banner read block one frame
-RETRY_MS = 15_000
+LOGIN_TIMEOUT = 8_000       # ms to get connected, DNS lookup is the only part that blocks
+RETRY_MS = 15_000           # wait after a failure, times the number of failures in a row (max 4)
 SILENT_MS = 90_000          # servers send a keepalive about every 20 s
 EXPIRE_MS = 30 * 60_000
 WIFI_WAIT_MS = 10_000       # no wifi after this long: fall back to demo
@@ -310,25 +323,35 @@ if not VALID:
     LAT, LON = DEFAULT_LAT, DEFAULT_LON
 COS0 = math.cos(math.radians(LAT))
 
-CALL = str(setting("APRS_CALLSIGN") or "").strip().upper() or "N0CALL"
+CALL = str(setting("APRS_CALLSIGN") or "").strip().upper()
+if CALL in ("", "N0CALL", "NOCALL"):
+    CALL = "BADGE"      # aprsc servers answer "Login by user not allowed" to N0CALL and NOCALL
 PASSCODE = str(setting("APRS_PASSCODE") or "").strip() or "-1"
 LOGIN = "user %s pass %s vers badge-aprs-map 0.1 filter r/%.4f/%.4f/%d\r\n" % (
     CALL, PASSCODE, LAT, LON, int(RADIUS))
 
 
 class LiveFeed:
-    """APRS-IS over a TCP socket. Non-blocking reads, one short blocking connect."""
+    """APRS-IS over a TCP socket. Only the DNS lookup blocks, connect and reads are non-blocking."""
 
     def __init__(self):
         self.sock = None
+        self.poller = None
         self.buf = b""
+        self.out = b""
         self.state = "idle"
         self.next_try = 0
+        self.started = 0
         self.last_rx = 0
+        self.fails = 0
         self.error = None
 
     def close(self):
         if self.sock:
+            try:
+                self.poller.unregister(self.sock)
+            except (OSError, KeyError, AttributeError):
+                pass
             try:
                 self.sock.close()
             except OSError:
@@ -340,30 +363,56 @@ class LiveFeed:
         self.close()
         self.state = "idle"
         self.error = reason
-        self.next_try = now + RETRY_MS
+        self.fails += 1
+        self.next_try = now + RETRY_MS * min(self.fails, 4)
 
     def step(self, now):
         """Returns up to MAX_LINES decoded lines."""
         if self.state == "idle":
             if now >= self.next_try:
-                self.state = "connecting"   # draw one frame saying so, then block
+                self.state = "connecting"   # draw one frame saying so, then do the lookup
             return []
         if self.state == "connecting":
             try:
                 addr = socket.getaddrinfo(HOST, PORT)[0][-1]
-                s = socket.socket()
-                self.sock = s
-                s.settimeout(LOGIN_TIMEOUT)
-                s.connect(addr)
-                s.recv(256)                 # server banner
-                s.send(LOGIN.encode())
-                s.setblocking(False)
+                self.sock = socket.socket()
+                self.sock.setblocking(False)
+                self.poller = select.poll()
+                self.poller.register(self.sock, select.POLLOUT)
+                try:
+                    self.sock.connect(addr)
+                except OSError as e:
+                    if e.args[0] not in (errno.EINPROGRESS, errno.EAGAIN):
+                        raise
             except (OSError, IndexError) as e:
                 self.fail(now, "connect: %s" % e)
                 return []
-            self.state = "live"
-            self.error = None
-            self.last_rx = now
+            self.out = LOGIN.encode()
+            self.started = now
+            self.state = "login"
+            return []
+        if self.state == "login":
+            if now - self.started > LOGIN_TIMEOUT:
+                self.fail(now, "connect timeout")
+                return []
+            events = self.poller.poll(0)
+            if not events:
+                return []
+            if events[0][1] & (select.POLLERR | select.POLLHUP):
+                self.fail(now, "connect refused")
+                return []
+            try:
+                sent = self.sock.send(self.out)
+            except OSError as e:
+                if e.args and e.args[0] == errno.EAGAIN:
+                    return []
+                self.fail(now, "send: %s" % e)
+                return []
+            self.out = self.out[sent:]
+            if not self.out:
+                self.state = "live"
+                self.error = None
+                self.last_rx = now
             return []
         try:
             data = self.sock.recv(1024)
@@ -378,6 +427,7 @@ class LiveFeed:
                 self.fail(now, "server closed")
                 return []
             self.last_rx = now
+            self.fails = 0
             self.buf = (self.buf + data)[-3000:]
         elif now - self.last_rx > SILENT_MS:
             self.fail(now, "no data")
@@ -389,9 +439,14 @@ class LiveFeed:
                 break
             raw, self.buf = self.buf[:i], self.buf[i + 1:]
             try:
-                lines.append(raw.decode().strip())
+                text = raw.decode().strip()
             except (ValueError, UnicodeError):
-                pass
+                text = "".join([chr(c) for c in raw]).strip()   # latin-1 bytes in a comment
+            # aprsc keeps the connection open after refusing a login and only sends keepalives
+            if text.startswith("# Login by user not allowed"):
+                self.fail(now, "login refused by server")
+                return []
+            lines.append(text)
         return lines
 
 
@@ -460,7 +515,7 @@ def start_feed(demo, reason=None):
         feed.close()
     store.stations.clear()
     selected = None
-    demo_reason = reason
+    demo_reason = reason if demo else None
     feed = DemoFeed() if demo else LiveFeed()
 
 
@@ -495,6 +550,11 @@ def nice_scale(px_per_km):
     return best
 
 
+def ago(ms):
+    s = ms // 1000
+    return "%ds" % s if s < 60 else "%dm" % (s // 60)
+
+
 def view_centre():
     if zoom and selected:
         s = store.stations.get(selected)
@@ -520,6 +580,7 @@ def draw_map(now):
     vx, vy = xy(LAT, LON)
     screen.pen = GRID
     screen.shape(shape.arc(vx, vy, RADIUS * px_km - 1, RADIUS * px_km, 0, 360))
+    screen.pen = DIM
     screen.line(vx - 4, vy, vx + 4, vy)
     screen.line(vx, vy - 4, vx, vy + 4)
 
@@ -591,7 +652,8 @@ def draw_bars(px_km, now):
         if s.speed is not None:
             text += " %d km/h" % s.speed
         if s.course is not None:
-            text += " %d" % s.course
+            text += " %d deg" % s.course
+        text += " %s" % ago(now - s.seen)
         screen.pen = LIME
     elif demo_reason:
         text = demo_reason
