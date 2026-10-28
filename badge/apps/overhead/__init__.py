@@ -36,15 +36,15 @@ HEADERS = {"User-Agent": "GitHub Universe Badge 2026 overhead app"}
 # adsb.lol sent the header `4, 4;w=1, 60;w=60, 500;w=86400`, read by third
 # party clients as 500 requests a day per IP address. Conference Wi-Fi shares
 # addresses, so positions are fetched rarely and planes are moved along their
-# track in between. 120 s is 240 requests over 8 hours.
-REFRESH_MS = 120_000        # between position fetches
+# track in between. 5 minutes is 96 requests over 8 hours.
+REFRESH_MS = 300_000        # between position fetches
 DEMO_REFRESH_MS = 5_000
 ROUTE_GAP_MS = 4_000        # between route lookups, each blocks about a second
 RETRY_MS = 30_000
 RATE_PAUSE_MS = 600_000     # after adsb.lol answers 429
 ROUTE_PAUSE_MS = 60_000     # after a route lookup is refused or fails
 TIMEOUT = 8
-EXTRAPOLATE_S = 180.0       # radar stops moving planes this long after a fetch
+EXTRAPOLATE_S = 330.0       # radar stops moving planes this long after a fetch
 
 # The point endpoint sends about 500 bytes per aircraft, so a busy 25 nm
 # circle was 42 KB. The default radius is smaller, and only the nearest
