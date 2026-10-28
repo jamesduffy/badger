@@ -1,6 +1,6 @@
 # GitHub Universe 2026 badge: my apps
 
-Six extra apps for the GitHub Universe 2026 badge, on top of the stock firmware tree from [badger/home](https://github.com/badger/home). Games, a GitHub dashboard, and a few radio and aviation toys: APRS stations on a map, planes overhead, and a MeshCore message viewer.
+Seven extra apps for the GitHub Universe 2026 badge, on top of the stock firmware tree from [badger/home](https://github.com/badger/home). Games, a GitHub dashboard, and a few radio and aviation toys: APRS stations on a map, an APRS position beacon for licensed operators, planes overhead, and a MeshCore message viewer.
 
 None of this has run on a real badge yet. Everything below passes static checks and host-side tests only. Each app's status is in the table, and I'll update it as I test.
 
@@ -12,10 +12,11 @@ None of this has run on a real badge yet. Everything below passes static checks 
 | [`ir_tag`](badge/apps/ir_tag/) | Fire IR shots at other badges. A hit badge sends a confirmation back. | no | sender call fixed to the real `aye_arr` API, untested |
 | [`gh_dash`](badge/apps/gh_dash/) | Review requests, open PRs, assigned issues, latest CI result for up to 3 repos. | Wi-Fi + GitHub token | demo mode works, live calls untested |
 | [`aprs_map`](badge/apps/aprs_map/) | Live map of APRS stations near a place you choose, with fading trails. Receive only. | Wi-Fi | parser tested on host and against the live feed |
+| [`aprs_beacon`](badge/apps/aprs_beacon/) | Send your position to APRS-IS as your own callsign, once or on a timer. Licensed operators only, internet only, no RF. | Wi-Fi | packet builder and login flow tested on host with a fake socket, never connected to a real server |
 | [`overhead`](badge/apps/overhead/) | Aircraft near you: callsign, type, altitude, speed, origin and destination, arriving or departing. List and radar views. | Wi-Fi | parser tested on saved real responses |
 | [`meshcore_feed`](badge/apps/meshcore_feed/) | MeshCore messages and contacts from your own BLE companion node. | BLE | prototype, about 3% odds live mode can pair, demo mode works |
 
-`validate_app.py` and the README check pass for all six. The `editor/` folder holds single-file copies you can paste into the [browser editor](https://badger.github.io/editor) plus host-side tests. In the simulator the accelerometer is a stub (use the d-pad for `tilt_maze`), and there is no IR, network or BLE, so the other apps run on demo data.
+`validate_app.py` and the README check pass for all seven. The `editor/` folder holds single-file copies you can paste into the [browser editor](https://badger.github.io/editor) plus host-side tests. In the simulator the accelerometer is a stub (use the d-pad for `tilt_maze`), and there is no IR, network or BLE, so the other apps run on demo data.
 
 ## Screenshots
 
@@ -37,6 +38,10 @@ Captured from the [badge simulator](https://badger.github.io/editor) running eac
 
 <img src="docs/screenshots/aprs_map-trails.png" width="320" alt="aprs_map trails"> <img src="docs/screenshots/aprs_map-zoomed.png" width="320" alt="aprs_map zoomed">
 
+**aprs_beacon**: the home screen in dry run (the simulator has no sockets), and the confirmation shown before anything is sent. The callsign in these frames is a made-up test value.
+
+<img src="docs/screenshots/aprs_beacon-home.png" width="320" alt="aprs_beacon home screen"> <img src="docs/screenshots/aprs_beacon-confirm.png" width="320" alt="aprs_beacon confirmation screen">
+
 **overhead**: list with detail, then the radar
 
 <img src="docs/screenshots/overhead-list.png" width="320" alt="overhead list and detail"> <img src="docs/screenshots/overhead-radar.png" width="320" alt="overhead radar">
@@ -56,7 +61,7 @@ Captured from the [badge simulator](https://badger.github.io/editor) running eac
 5. Copy the apps to the `BADGER` volume. Its root is the badge's `/system`, so apps go in `apps/`. Never copy to the `RP2350` drive, that is the bootloader.
 
 ```bash
-cp -R badge/apps/{tilt_maze,ir_tag,gh_dash,aprs_map,overhead,meshcore_feed} /Volumes/BADGER/apps/
+cp -R badge/apps/{tilt_maze,ir_tag,gh_dash,aprs_map,aprs_beacon,overhead,meshcore_feed} /Volumes/BADGER/apps/
 diskutil eject /Volumes/BADGER
 mpremote connect "$PORT" reset
 ```
@@ -76,10 +81,67 @@ Wi-Fi and your GitHub username can be set in the badge's Settings app. Everythin
 | `MAP_LAT`, `MAP_LON` | `aprs_map`, `overhead` | optional, decimal degrees. Defaults to the GitHub Universe 2026 venue (37.8068, -122.4315). |
 | `MAP_RADIUS_KM` | `aprs_map` | optional, default 25 |
 | `PLANES_RADIUS_NM` | `overhead` | optional, default 15, range 3 to 40 |
-| `APRS_CALLSIGN` | `aprs_map` | optional, goes in the APRS-IS login line, defaults to `N0CALL` |
+| `APRS_CALLSIGN` | `aprs_map`, `aprs_beacon` | `aprs_map`: optional, goes in the login line, default is a placeholder. `aprs_beacon`: required, your own callsign, placeholders refused |
+| `APRS_PASSCODE` | `aprs_beacon` | required to transmit, your APRS-IS passcode (0 to 32767). Not computed by the app, `-1` refused |
+| `BEACON_COMMENT`, `BEACON_INTERVAL_MIN`, `APRS_DRYRUN` | `aprs_beacon` | optional: comment (43 chars), minutes between automatic beacons (default 30, 10 to 120), dry run (`1`) |
 | `APRS_DEMO`, `PLANES_DEMO` | `aprs_map`, `overhead` | optional, set to `1` to force demo data |
 
 `secrets.py` is plain text on a device other people pick up. Use a token that can only read what the dashboard needs, and never commit real values. `badge/secrets.py` in this repo stays empty.
+
+## TODO once I have a real badge
+
+Do these in order. Note what actually happens next to each one, and update the status table when done. Anything marked unverified above is a guess until it runs on hardware.
+
+**Setup**
+- [ ] Install the apps (Quick setup above) and check the menu shows their icons. If not, copy the patched `badge/apps/menu/app.py`.
+- [ ] `import aye_arr.nec as n; print(dir(n))` over `mpremote`. Note the version and whether `NECRemoteReceiver` and `NECSender` exist.
+- [ ] Find where the Settings app writes Wi-Fi values (`/secrets.py` or `/system/secrets.py`) and add the extra settings there.
+- [ ] Open each app once and check both orientations and the capacitive pads.
+
+**tilt_maze**
+- [ ] Tilt right, left, top away, top toward. If any direction is reversed, flip a sign in `Tilt.read`.
+- [ ] Check the 2 s hold-steady count and that the ball does not drift at rest.
+- [ ] Tune `ACCEL`, `MAX_SPEED`, `DEADZONE` by feel.
+- [ ] Flip the badge and check `upside_down()` does not flicker.
+
+**ir_tag** (needs a second badge)
+- [ ] Does the sender start (no "rx only" text on screen)?
+- [ ] Do two badges tag each other, and does the shooter see "hit confirmed"?
+- [ ] Note range and angle. Does the badge hear its own shot?
+- [ ] Check Quest still works if it did before.
+
+**gh_dash**
+- [ ] Add a read-only, short-lived token and your username. Check the first fetch fills the numbers.
+- [ ] Put a wrong token in once and check the 401 message, and that the token is never shown.
+- [ ] Check the "updating..." frame appears before each blocking request.
+- [ ] Decide whether "latest CI" needs `owner/repo@main`.
+
+**aprs_map**
+- [ ] Try on the venue Wi-Fi. If port 14580 is blocked, try a phone hotspot.
+- [ ] Do real stations show up, and do trails grow?
+- [ ] Check frame rate and memory with 40 stations. Note label overlap.
+- [ ] Raise `EXPIRE_MS` to 60 minutes if digis flicker.
+
+**aprs_beacon** (licensed operator, your own callsign only)
+- [ ] First run with `APRS_DRYRUN = 1`. Check the packet on screen is what you expect and the position is the venue, not home.
+- [ ] Set `APRS_CALLSIGN` and `APRS_PASSCODE`. Send one real beacon. Check it on aprs.fi and that the login answered "verified".
+- [ ] Put a wrong passcode in on purpose and check it sends nothing and says "login not verified".
+- [ ] Try automatic mode at the 30 minute default. Check it shows the next time and turns off with Up.
+- [ ] Decide whether to register a tocall instead of `APZUNV`.
+
+**overhead**
+- [ ] Does it draw straight away on Wi-Fi, with "fetching aircraft..." before each request?
+- [ ] Are the aircraft real and near the venue? Does arriving or departing look right for SFO and OAK traffic?
+- [ ] Watch for HTTP 429 or other errors from adsb.lol. Refresh is every 5 minutes.
+- [ ] Check memory with a busy 15 nm circle.
+
+**meshcore_feed**
+- [ ] Choose Live once and read the status line. If it says it cannot pair, stop there.
+- [ ] If you want it to work, try the Wi-Fi companion firmware over TCP on a spare node.
+
+**After testing**
+- [ ] Replace the simulator screenshots with real photos.
+- [ ] Update the status column and delete this list.
 
 ## Things I'm checking on hardware
 
@@ -91,7 +153,7 @@ Wi-Fi and your GitHub username can be set in the badge's Settings app. Everythin
 
 ## Data sources and limits
 
-- **APRS:** the [APRS-IS](https://www.aprs-is.net/) network via `rotate.aprs2.net:14580`, with a server-side range filter and a receive-only login (passcode `-1`). The app never transmits. I skipped the aprs.fi API because it can't search by area and its terms forbid pre-caching.
+- **APRS:** the [APRS-IS](https://www.aprs-is.net/) network via `rotate.aprs2.net:14580`, with a server-side range filter and a receive-only login (passcode `-1`). `aprs_map` never transmits. `aprs_beacon` logs in under your own callsign with your passcode, waits for the server to say "verified", sends one position report, and closes. It is the internet side of APRS only, the badge has no radio. I skipped the aprs.fi API because it can't search by area and its terms forbid pre-caching.
 - **Aircraft positions:** [adsb.lol](https://api.adsb.lol), open data under the [ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/). No key today, but they say one may be required later. It returned a rate-limit header that might mean 500 requests per day per address, so `overhead` refreshes every 5 minutes (about 96 requests in 8 hours). The header is unofficial. Venue Wi-Fi shares one IP, so the cap could still be hit. If `overhead` starts showing HTTP errors, raise `REFRESH_MS`.
 - **Aircraft routes:** [adsbdb](https://www.adsbdb.com), looked up by callsign and cached. Callsigns get reused, so arriving and departing is a good guess, not a fact. How the app decides is in [`badge/apps/overhead/README.md`](badge/apps/overhead/README.md).
 - **MeshCore:** the documented companion protocol from [meshcore-dev](https://github.com/meshcore-dev). Live mode can send a real message on your mesh when you pick a canned reply.
@@ -100,4 +162,4 @@ Wi-Fi and your GitHub username can be set in the badge's Settings app. Everythin
 
 This is a fork of [badger/home](https://github.com/badger/home), the GitHub Universe 2026 badge firmware tree, which is based on Pimoroni's [Tufty 2350](https://shop.pimoroni.com/products/tufty-2350). The original README is in `UPSTREAM_README.md`. For the 2026 API, read [`badge/AGENTS.md`](badge/AGENTS.md) and [`hardware/README.md`](hardware/README.md) first, and don't use `badge25/` patterns.
 
-MIT, same as upstream. See [`LICENSE`](LICENSE). I wrote the six apps above. The upstream project asks that contributions contain no third-party characters, art, logos or trademarks, and the apps follow that.
+MIT, same as upstream. See [`LICENSE`](LICENSE). I wrote the seven apps above. The upstream project asks that contributions contain no third-party characters, art, logos or trademarks, and the apps follow that.
