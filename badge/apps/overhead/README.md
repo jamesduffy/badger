@@ -4,7 +4,7 @@ Show aircraft near a place you choose, with where each is coming from and going 
 
 ## Usage
 
-Needs Wi-Fi and a location. Set these in `secrets.py` on the badge: `WIFI_SSID`, `WIFI_PASSWORD`, `MAP_LAT` and `MAP_LON` (decimal degrees, for example `MAP_LAT = 12.3456`). Optionally set `PLANES_RADIUS_NM` (nautical miles, default 15, limited to 3 to 40). There is no built-in location. Without `MAP_LAT` and `MAP_LON` the app runs on demo data with made-up aircraft and airports and uses no network.
+Needs Wi-Fi. Set `WIFI_SSID` and `WIFI_PASSWORD` in `secrets.py` on the badge. The place defaults to the GitHub Universe 2026 venue (37.8068, -122.4315). To use another, set `MAP_LAT` and `MAP_LON` (decimal degrees, for example `MAP_LAT = 12.3456`). Both must be set and valid, otherwise the default is used. Optionally set `PLANES_RADIUS_NM` (nautical miles, default 15, limited to 3 to 40). Without Wi-Fi after 10 seconds, or with `PLANES_DEMO = 1`, the app runs on demo data with made-up aircraft and airports around the chosen place and uses no network.
 
 Controls:
 

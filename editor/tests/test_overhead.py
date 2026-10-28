@@ -227,20 +227,39 @@ class Classify(unittest.TestCase):
 class Behaviour(unittest.TestCase):
     def test_radius_and_demo(self):
         a = load()
-        self.assertTrue(a["DEMO"])
+        self.assertFalse(a["DEMO"])
+        self.assertEqual((a["LAT"], a["LON"]), (37.8068139014702, -122.43150989195377))
         self.assertEqual(a["RADIUS"], 15)
+        a = load(secrets_values={"PLANES_DEMO": "1"})
+        self.assertTrue(a["DEMO"])
         a = load(secrets_values={"MAP_LAT": "10.5", "MAP_LON": "-20.25", "PLANES_RADIUS_NM": 500})
         self.assertFalse(a["DEMO"])
         self.assertEqual((a["LAT"], a["LON"]), (10.5, -20.25))
         self.assertEqual(a["RADIUS"], 40)
         a = load(secrets_values={"MAP_LAT": 10, "MAP_LON": 20, "PLANES_RADIUS_NM": 1})
         self.assertEqual(a["RADIUS"], 3)
-        a = load(secrets_values={"MAP_LAT": 100, "MAP_LON": 20})
+        # bad or missing values fall back to the venue, not to demo
+        for values in ({"MAP_LAT": 100, "MAP_LON": 20}, {"MAP_LAT": "abc", "MAP_LON": 20},
+                       {"MAP_LAT": "", "MAP_LON": ""}, {"MAP_LAT": 10}):
+            a = load(secrets_values=values)
+            self.assertFalse(a["DEMO"])
+            self.assertEqual((a["LAT"], a["LON"]), (37.8068139014702, -122.43150989195377))
+
+    def test_no_wifi_module_falls_back_to_demo(self):
+        a = load()
+        a["badge"].ticks = 1000
+        a["update"]()
         self.assertTrue(a["DEMO"])
-        a = load(secrets_values={"MAP_LAT": "abc", "MAP_LON": 20})
-        self.assertTrue(a["DEMO"])
-        a = load(secrets_values={"MAP_LAT": "", "MAP_LON": ""})
-        self.assertTrue(a["DEMO"])
+        self.assertIn("no wifi", a["demo_reason"])
+        a["badge"].ticks = 2000
+        a["update"]()
+        self.assertEqual(len(a["planes"]), 7)
+
+    def test_demo_planes_sit_around_the_centre(self):
+        a = load(secrets_values={"PLANES_DEMO": "1"})
+        for rec in a["demo_aircraft"](0):
+            self.assertLess(abs(rec["lat"] - a["LAT"]), 3)
+            self.assertLess(abs(rec["lon"] - a["LON"]), 3)
 
     def test_set_planes_from_real_response_and_cache(self):
         a = load(secrets_values={"MAP_LAT": TEST_LAT, "MAP_LON": TEST_LON, "PLANES_RADIUS_NM": 25})
@@ -294,7 +313,7 @@ class Behaviour(unittest.TestCase):
         a["update"]()
 
     def test_demo_draws_both_views(self):
-        a = load()
+        a = load(secrets_values={"PLANES_DEMO": "1"})
         a["badge"].ticks = 1000
         a["update"]()
         self.assertEqual(len(a["planes"]), 7)

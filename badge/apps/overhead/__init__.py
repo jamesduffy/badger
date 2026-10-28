@@ -3,8 +3,9 @@ Overhead: aircraft near a place you choose, with where each is coming from and
 going to.
 
 Positions come from adsb.lol (v2 point endpoint) and routes from adsbdb, both
-free and keyless. The place and Wi-Fi come from secrets.py. With no MAP_LAT and
-MAP_LON set it runs on demo data and uses no network.
+free and keyless. Wi-Fi comes from secrets.py. The place defaults to the GitHub
+Universe 2026 venue; set MAP_LAT and MAP_LON to use another. With no Wi-Fi, or
+PLANES_DEMO set, it runs on demo data.
 
 Controls:
 * Up and down = Pick an aircraft
@@ -91,15 +92,22 @@ def number(name):
         return None
 
 
+# GitHub Universe 2026 venue, used unless MAP_LAT and MAP_LON are both set
+DEFAULT_LAT = 37.8068139014702
+DEFAULT_LON = -122.43150989195377
+
 LAT = number("MAP_LAT")
 LON = number("MAP_LON")
 if LAT is not None and not -90 <= LAT <= 90:
     LAT = None
 if LON is not None and not -180 <= LON <= 180:
     LON = None
-DEMO = LAT is None or LON is None
-if DEMO:
-    LAT, LON = 0.0, 0.0
+if LAT is None or LON is None:
+    LAT, LON = DEFAULT_LAT, DEFAULT_LON
+DEMO = bool(getattr(secrets, "PLANES_DEMO", ""))
+demo_reason = "demo data (PLANES_DEMO set)"
+WIFI_WAIT_MS = 10_000       # no wifi after this long: fall back to demo
+wifi_wait_from = None
 
 RADIUS = number("PLANES_RADIUS_NM")
 RADIUS = DEFAULT_RADIUS_NM if RADIUS is None else int(RADIUS)
@@ -318,7 +326,12 @@ def demo_aircraft(seconds):
         if gs and trk is not None and alt != "ground":
             e += gs / 3600.0 * math.sin(math.radians(trk)) * seconds
             n += gs / 3600.0 * math.cos(math.radians(trk)) * seconds
-        rec = {"hex": "demo%d" % len(records), "alt_baro": alt, "lat": n / 60.0, "lon": e / 60.0}
+        rec = {
+            "hex": "demo%d" % len(records),
+            "alt_baro": alt,
+            "lat": LAT + n / 60.0,
+            "lon": LON + e / (60.0 * math.cos(math.radians(LAT))),
+        }
         if call:
             rec["flight"] = call + "  "
         if kind:
@@ -452,9 +465,19 @@ def fetch_route(callsign):
         response.close()
 
 
+def go_demo(reason):
+    global DEMO, demo_reason, fault, next_positions
+    DEMO = True
+    demo_reason = reason
+    fault = None
+    next_positions = 0
+    route_cache.update(DEMO_ROUTES)
+    route_order.extend(DEMO_ROUTES)
+
+
 def network_step():
     """At most one blocking request per call, spaced out by the timers."""
-    global next_net, fault, next_positions
+    global next_net, fault, next_positions, wifi_wait_from
     now = badge.ticks
     if DEMO:
         if now >= next_positions:
@@ -464,12 +487,17 @@ def network_step():
     if now < next_net:
         return
     if wifi is None:
-        fault = "no wifi module"
+        go_demo("no wifi module, demo data")
         return
     if not wifi.is_connected():
+        if wifi_wait_from is None:
+            wifi_wait_from = now
         if not wifi.connect():
             fault = wifi.status()[1]
+        if now - wifi_wait_from > WIFI_WAIT_MS:
+            go_demo("no wifi, demo data")
         return
+    wifi_wait_from = None
     if now >= next_positions:
         fetch_positions()
         next_net = badge.ticks + ROUTE_GAP_MS
@@ -481,8 +509,7 @@ def network_step():
 
 
 if DEMO:
-    route_cache.update(DEMO_ROUTES)
-    route_order.extend(DEMO_ROUTES)
+    go_demo(demo_reason)
 
 
 # ---- drawing
@@ -520,7 +547,7 @@ def draw_bar():
     if fault:
         text, pen = fit(fault, 190), RED
     elif DEMO:
-        text, pen = "demo data, set MAP_LAT and MAP_LON", AMBER
+        text, pen = fit(demo_reason, 190), AMBER
     elif fetched_at is None:
         text, pen = "loading...", DIM
     else:
