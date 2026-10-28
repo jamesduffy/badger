@@ -40,7 +40,7 @@ last_shot = -COOLDOWN_MS
 pending_ack = None
 ack_at = 0
 sim_ack_at = None
-last_event = "point at a badge, press Select"
+last_event = "aim, press Select"
 flash = 0.0
 flash_color = GREEN
 send_error = ""
@@ -133,10 +133,10 @@ def draw():
 
     screen.pen = DIM
     if not HAVE_IR:
-        screen.text("sim: Select fires, Up = get hit", 4, 106)
+        screen.text("sim: Up = get hit", 4, 106)
     elif sender is None:
         screen.pen = RED
-        screen.text("receive only: " + send_error[:20], 4, 106)
+        screen.text("rx only: " + send_error[:14], 4, 106)
 
     if flash > 0.05:
         screen.pen = flash_color
