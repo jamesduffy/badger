@@ -297,14 +297,17 @@ def number(key):
         return None
 
 
+# GitHub Universe 2026 venue, used unless MAP_LAT and MAP_LON are both set
+DEFAULT_LAT = 37.8068139014702
+DEFAULT_LON = -122.43150989195377
+
 LAT = number("MAP_LAT")
 LON = number("MAP_LON")
 RADIUS = number("MAP_RADIUS_KM") or 25.0
 RADIUS = max(1.0, min(RADIUS, 500.0))
-CONFIGURED = LAT is not None and LON is not None and -90 <= LAT <= 90 and -180 <= LON <= 180
-# no venue is built in: unset means a synthetic demo around 0,0 with a banner
-if not CONFIGURED:
-    LAT, LON = 0.0, 0.0
+VALID = LAT is not None and LON is not None and -90 <= LAT <= 90 and -180 <= LON <= 180
+if not VALID:
+    LAT, LON = DEFAULT_LAT, DEFAULT_LON
 COS0 = math.cos(math.radians(LAT))
 
 CALL = str(setting("APRS_CALLSIGN") or "").strip().upper() or "N0CALL"
@@ -461,9 +464,7 @@ def start_feed(demo, reason=None):
     feed = DemoFeed() if demo else LiveFeed()
 
 
-if not CONFIGURED:
-    start_feed(True, "set MAP_LAT, MAP_LON in secrets.py")
-elif setting("APRS_DEMO"):
+if setting("APRS_DEMO"):
     start_feed(True, "demo (APRS_DEMO set)")
 elif socket is None or wifi is None:
     start_feed(True, "no sockets here, demo")
@@ -608,7 +609,7 @@ def handle_input():
         zoom = (zoom + 1) % len(ZOOMS)
     if badge.pressed(BUTTON_LEFT):
         selected = None
-    if badge.pressed(BUTTON_RIGHT) and CONFIGURED and socket and wifi:
+    if badge.pressed(BUTTON_RIGHT) and socket and wifi:
         # toggle between live and demo
         start_feed(not isinstance(feed, DemoFeed), "demo (Right to go live)")
     step = (badge.pressed(BUTTON_DOWN) and 1) or (badge.pressed(BUTTON_UP) and -1) or 0

@@ -22,6 +22,12 @@ def near(a, b, tol=0.001):
     return abs(a - b) < tol
 
 
+class Defaults(unittest.TestCase):
+    def test_default_venue(self):
+        self.assertIn("DEFAULT_LAT = 37.8068139014702", text)
+        self.assertIn("DEFAULT_LON = -122.43150989195377", text)
+
+
 class Parser(unittest.TestCase):
     def test_plain(self):
         p = parse_packet("TEST-1>APRS,TCPIP*:!4903.50N/07201.75W-Test")

@@ -9,7 +9,7 @@ Needs Wi-Fi. The app connects to the APRS-IS network (`rotate.aprs2.net:14580`) 
 Set these in `secrets.py` on the badge:
 
 - `WIFI_SSID`, `WIFI_PASSWORD`: as for any network app.
-- `MAP_LAT`, `MAP_LON`: map centre in signed decimal degrees (north and east positive, for example `MAP_LAT = 12.3456`, `MAP_LON = -98.7654`). There is no built-in location. If unset the app runs a demo around 0,0 with a banner.
+- `MAP_LAT`, `MAP_LON`: optional map centre in signed decimal degrees (north and east positive, for example `MAP_LAT = 12.3456`, `MAP_LON = -98.7654`). Defaults to the GitHub Universe 2026 venue (37.8068, -122.4315). Both must be set and valid, otherwise the default is used.
 - `MAP_RADIUS_KM`: optional, default 25, range 1 to 500.
 - `APRS_CALLSIGN`: optional, your callsign for the login line. Defaults to `N0CALL`.
 - `APRS_PASSCODE`: optional, defaults to `-1` (receive only). Leave it alone, the app does not send anything.
@@ -20,7 +20,7 @@ Controls:
 - Select: cycle zoom (full radius, then 1/2, 1/4, 1/10).
 - Up / Down: select the previous or next station, nearest first. When zoomed in the map centres on the selected station and the footer shows speed and course.
 - Left: clear the selection and centre on your location.
-- Right: switch between live and demo (only when a location is set).
+- Right: switch between live and demo.
 - Back: exit.
 
 The header shows the station count and status. The nearest four stations are labelled. Trails keep the last 10 positions per station, up to 40 stations are held, and a station is dropped after 30 minutes of silence. Stations not heard for 10 minutes are drawn grey.
