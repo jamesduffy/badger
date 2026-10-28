@@ -4,7 +4,7 @@ Date: 2026-10-28. Nothing here was run on a badge or a MeshCore node. Labels: **
 
 ## Bottom line
 
-- Best path: badge as BLE central to your own BLE companion node. Protocol is documented. Odds it works today: roughly 25%, because the node requires an encrypted PIN-paired link and I could not confirm the badge BLE stack can pair (see below).
+- Best path: badge as BLE central to your own BLE companion node. Protocol is documented. Odds it works today: roughly 25% before review, revised to about 3% (see "What changed after review"), because the node requires an encrypted PIN-paired link and I could not confirm the badge BLE stack can pair (see below).
 - Wi-Fi TCP path is technically simpler but needs a Wi-Fi companion build you compile yourself. Likely not what your nodes run.
 - Qw/ST serial board: plausible, but needs extra hardware, and nothing is built.
 - Public data over Wi-Fi: no documented public API found.
@@ -19,7 +19,7 @@ Date: 2026-10-28. Nothing here was run on a badge or a MeshCore node. Labels: **
 | Camera app avoids BLE SMP pairing and does its own application-level pairing over a custom GATT service | verified (code), reason inferred | `camera_ble.py`, `camera_pairing.py`. Possibly because SMP is not available, but no comment says so |
 | Simulator Bluetooth is an inert stub, no raw sockets | verified | `references/simulator.md` |
 | `gap_pair`, `_IRQ_ENCRYPTION_UPDATE`, `_IRQ_PASSKEY_ACTION` exist in upstream MicroPython, but "currently only supported when using the NimBLE stack on ESP32, STM32 and Unix" | verified | https://docs.micropython.org/en/latest/library/bluetooth.html (Pairing and bonding) |
-| RP2350 with CYW43/RM2 uses the BTstack, not NimBLE | inferred (from general MicroPython rp2 port knowledge, not checked in this repo) | n/a |
+| RP2350 with CYW43/RM2 uses the BTstack, not NimBLE | inferred. Upstream Pico 2 W board sets `MICROPY_BLUETOOTH_BTSTACK ON` ; Pimoroni's tufty2350 README does not say which stack its firmware uses | https://raw.githubusercontent.com/micropython/micropython/master/ports/rp2/boards/RPI_PICO2_W/mpconfigboard.cmake ; https://github.com/pimoroni/tufty2350 |
 | Badge firmware (1.29 preview) can run `gap_pair` | unknown | test on badge |
 | No repo app uses `gap_pair`, `gap_passkey` or `config(bond=...)` | verified | grep of `badge/` |
 
@@ -45,11 +45,11 @@ Date: 2026-10-28. Nothing here was run on a badge or a MeshCore node. Labels: **
 | Messages: V3 only if app_target_ver >= 3. DM v3 (16): snr, 2 reserved, 6-byte pubkey prefix, path_len, txt_type, u32 timestamp, text. Channel v3 (17): snr, 2 reserved, channel_idx, path_len, txt_type, u32 timestamp, text. Non-V3 codes 7 and 8 drop the 3 snr/reserved bytes | verified | wiki + MyMesh.cpp |
 | Push 0x83 MSG_WAITING means call SYNC_NEXT_MESSAGE; empty queue replies NO_MORE_MESSAGES (10) | verified | wiki + MyMesh.cpp constants |
 | SEND_TXT_MSG: `[2, txt_type, attempt, u32 timestamp, 6-byte pubkey prefix, text<=160]`; reply SENT (6) or ERR (1) | verified | wiki + MyMesh.cpp |
-| Channel text arrives as "sender: text" in the text field | unknown | not in sources read |
-| CURR_TIME (9) reply is `[9, u32 LE]` | inferred | code 9 verified, layout not read |
-| Send to a channel (CMD 3) layout | unknown | not read, prototype does not send to channels |
+| Channel text arrives as "sender: text" in the text field | unknown | not in MyMesh.cpp (frame carries channel_idx only, no channel name or sender) or meshcore_py reader.py. The app just shows the text |
+| CURR_TIME (9) reply is `[9, u32 LE]` | verified | MyMesh.cpp, meshcore_py reader.py (example 78 56 34 12 = 0x12345678) |
+| Send to a channel (CMD 3): `[3, txt_type 0, channel_idx, u32 LE ts, text]` | verified (not used by the app) | MyMesh.cpp, meshcore_py messaging.py |
 | Pages say "still in development", may be inaccurate. Wiki says "may be outdated" | verified | both pages |
-| CCCD descriptor sits at value handle + 1 on the node | unknown | the prototype assumes this. Discover descriptors if the subscribe write fails |
+| CCCD descriptor sits at value handle + 1 on the node | unknown. No longer assumed, the app now discovers descriptors and looks for 0x2902 | see review section |
 
 ## Options ranked (effort, then chance of working today)
 
@@ -72,3 +72,46 @@ Validators passed (py_compile, validate_app, validate_app_readmes). That proves 
 3. Does the status reach "encrypted, discovering"? If it stalls at "pairing", `gap_pair` is a no-op or the passkey action never fires.
 4. If paired: do contacts and messages appear? A failed subscribe points at the CCCD handle assumption.
 5. Only then try a reply send.
+
+## What changed after review (2026-10-28)
+
+Nothing below ran on a badge or a node. Sources were read over HTTPS, some through a summarizing fetch tool, so re-check the quoted code lines before relying on them.
+
+### Revised odds: about 3% that live mode works on this firmware
+
+Why:
+
+- Pairing is compiled only for NimBLE on rp2. In upstream `ports/rp2/CMakeLists.txt` the `MICROPY_PY_BLUETOOTH_ENABLE_PAIRING_BONDING=1` define sits in the NimBLE branch only (verified in upstream master, https://raw.githubusercontent.com/micropython/micropython/master/ports/rp2/CMakeLists.txt). The default in `extmod/modbluetooth.h` is 0 (verified). The CYW43 boards use BTstack (verified for Pico 2 W; inferred for the badge firmware).
+- Even where BTstack pairing is compiled, `mp_bluetooth_gap_passkey()` returns `MP_EOPNOTSUPP` and there are no `SM_EVENT_PASSKEY_*` handlers (verified, `extmod/btstack/modbluetooth_btstack.c` master). MeshCore needs MITM with a static PIN, so the badge would have to type the PIN. That path does not exist in that file.
+- Docs say pairing is only supported on NimBLE (ESP32, STM32, Unix) (verified, docs.micropython.org/en/latest/library/bluetooth.html).
+- The camera app does its own application-level pairing and the repo has no `gap_pair` use (verified by grep). That fits, but is not proof.
+- The remaining 3% is for a Pimoroni or GitHub build that differs from upstream (unknown) or a node set to a no-PIN mode (not seen in the sources).
+
+The protocol side is now mostly verified, so a firmware that could pair would probably get to messages. The blocker is the radio stack, not the protocol.
+
+### Protocol checks against the app
+
+- Contact frame is 148 bytes with `MAX_PATH_SIZE` 64: name at 100-131, last_advert u32 LE at 132. The app counts from the end (`f[-48:-16]`, `len-16`), which gives the same offsets and works for any path size. Verified: MyMesh.cpp, meshcore_py reader.py.
+- DM v3 (16): prefix 4-9, txt_type 11, timestamp 12-15 LE, text 16. v2 (7): prefix 1-6, txt_type 8, timestamp 9-12, text 13. Channel v3 (17): channel 4, timestamp 7-10, text 11. v2 (8): timestamp 4-7, text 8. All matched the app.
+- SEND_TXT_MSG `[2, 0, attempt, u32 LE ts, 6 byte prefix, text]`, APP_START name at offset 8, DEVICE_QUERY `[22, 3]` matched.
+- Fixed: DMs with txt_type 2 (signed) carry 4 signature bytes before the text. The app showed them as text garbage. meshcore_py reader.py parses them the same way.
+- Fixed: CCCD handle no longer assumed. The app discovers descriptors after the TX value handle and writes the 0x2902 one.
+
+### Code fixes in the app
+
+- Live stops before scanning with "this firmware cannot pair" if `gap_pair` or the pairing `config()` is missing. Passkey failure is also caught.
+- Per-state deadlines for scan, connect, pairing, discovery and subscribe. Bad PIN, disconnect and write refusal show a specific message on the start screen. Re-pick Live to retry.
+- A write-done status other than 0 (for example "insufficient authentication") is now an error instead of being ignored.
+- Malformed frames are caught per frame. Text is cleaned to printable ASCII without `bytes.decode(errors=)`, which MicroPython may not honor. Long words wrap by character, names and titles truncate with "..".
+- Contacts: parsed with a hard stop at 300 and 100 kept, newest first.
+- The simulator showed that `bytes(bluetooth.UUID(...))` and `bytes[::-1]` fail in MicroPython. Both were removed. Scan match also accepts a name starting with "MeshCore", since the UUID may only be in the scan response.
+- Reply safety: SELECT on a DM opens the canned list, SELECT picks a text, a confirm screen shows recipient and text, and a second SELECT (ignored for 700 ms) sends. The recipient is fixed when the reply starts, so a new message arriving cannot change it. Sending also needs a ready link and a node time. Canned texts are 4 short plain replies. Demo mode never sends.
+- Start screen now says live is probably going to fail.
+
+### Still only a real node and badge can show
+
+- Whether the badge firmware has any pairing support at all.
+- Whether `bytes(UUID)` order and the advertising match find the node.
+- Whether the ESP32 node notifies frames up to 172 bytes after the badge MTU exchange (contacts, messages). With MTU 23 they would be cut off.
+- Whether notifications are queued correctly under 80 events when 50+ contacts arrive.
+- Channel text format and whether `sender: text` is in the text.
